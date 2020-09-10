@@ -34,9 +34,10 @@ import org.testng.annotations.Test;
 import javax.ws.rs.HttpMethod;
 import java.io.IOException;
 import java.net.UnknownHostException;
-import java.util.*;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -148,6 +149,7 @@ public class TestRenderings extends ReportingTestSuite {
         conf.addBrowser(new DesktopBrowserInfo(new RectangleSize(800, 800), BrowserType.SAFARI));
         eyes.setConfiguration(conf);
         eyes.setLogHandler(new StdoutLogHandler());
+        eyes.setSaveNewTests(false);
         ChromeDriver driver = SeleniumUtils.createChromeDriver();
         driver.get("http://applitools.github.io/demo");
         try {
@@ -175,7 +177,7 @@ public class TestRenderings extends ReportingTestSuite {
         com.applitools.eyes.selenium.Configuration config = eyes.getConfiguration();
         config.addBrowser(new DesktopBrowserInfo(new RectangleSize(700, 460), BrowserType.CHROME));
         config.addDeviceEmulation(DeviceName.Galaxy_S3);
-        config.addBrowser(new IosDeviceInfo(IosDeviceName.iPhone_11_Pro));
+        config.addBrowser(new IosDeviceInfo(IosDeviceName.iPhone_11_Pro, ScreenOrientation.LANDSCAPE));
         config.addBrowser(new IosDeviceInfo(IosDeviceName.iPhone_XR));
         config.setBatch(TestDataProvider.batchInfo);
         config.setAppName("Applitools Eyes Sdk");
@@ -230,7 +232,7 @@ public class TestRenderings extends ReportingTestSuite {
 
         Assert.assertEquals(testResults[0].getHostDisplaySize(), new RectangleSize(700, 460));
         Assert.assertEquals(testResults[1].getHostDisplaySize(), new RectangleSize(360, 640));
-        Assert.assertEquals(testResults[2].getHostDisplaySize(), new RectangleSize(375, 812));
+        Assert.assertEquals(testResults[2].getHostDisplaySize(), new RectangleSize(812, 375));
         Assert.assertEquals(testResults[3].getHostDisplaySize(), new RectangleSize(414, 896));
     }
 
@@ -272,33 +274,20 @@ public class TestRenderings extends ReportingTestSuite {
 
 
         // Mocking server connector to add fake missing resources to the render request
-        final AtomicBoolean alreadyRun = new AtomicBoolean(false);
         final ServerConnector serverConnector = new ServerConnector() {
             @Override
-            public void render(final TaskListener<List<RunningRender>> listener, RenderRequest... renderRequests) {
-                super.render(new TaskListener<List<RunningRender>>() {
-                    @Override
-                    public void onComplete(List<RunningRender> runningRenders) {
-                        if (!alreadyRun.get()) {
-                            runningRenders.get(0).setNeedMoreResources(Arrays.asList(missingUrl, unknownHostUrl));
-                            runningRenders.get(0).setRenderStatus(RenderStatus.NEED_MORE_RESOURCE);
-                            alreadyRun.set(true);
-                        }
-
-                        listener.onComplete(runningRenders);
-                    }
-
-                    @Override
-                    public void onFail() {
-                        listener.onFail();
-                    }
-                }, renderRequests);
+            public void checkResourceStatus(final TaskListener<Boolean[]> listener, String renderId, HashObject... hashes) {
+                Boolean[] result = new Boolean[hashes.length];
+                for (int i = 0; i < hashes.length; i++) {
+                    result[i] = !hashes[i].getHash().equals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+                }
+                listener.onComplete(result);
             }
 
             @Override
-            public Future<?> renderPutResource(RunningRender runningRender, RGridResource resource, String userAgent, TaskListener<Boolean> listener) {
+            public Future<?> renderPutResource(String renderId, RGridResource resource, TaskListener<Void> listener) {
                 missingResources.put(resource.getUrl(), resource);
-                return super.renderPutResource(runningRender, resource, userAgent, listener);
+                return super.renderPutResource(renderId, resource, listener);
             }
         };
         VisualGridRunner runner = spy(new VisualGridRunner(10));
@@ -312,8 +301,8 @@ public class TestRenderings extends ReportingTestSuite {
                 return null;
             }
         }).when(runner).check(any(ICheckSettings.class), nullable(IDebugResourceWriter.class), any(FrameData.class),
-                any(IEyesConnector.class), ArgumentMatchers.<List<VisualGridTask>>any(), ArgumentMatchers.<List<VisualGridTask>>any(),
-                any(VisualGridRunner.RenderListener.class), ArgumentMatchers.<List<VisualGridSelector[]>>any(), any(UserAgent.class));
+                any(IEyesConnector.class), ArgumentMatchers.<List<VisualGridTask>>any(),
+                ArgumentMatchers.<List<VisualGridSelector[]>>any(), any(UserAgent.class));
 
         Eyes eyes = new Eyes(runner);
         eyes.setLogHandler(new StdoutLogHandler());
@@ -339,15 +328,8 @@ public class TestRenderings extends ReportingTestSuite {
             }
         }
 
-        RGridResource missingResource = missingResources.get(missingUrl);
-        Assert.assertEquals(missingResource.getUrl(), missingUrl);
-        Assert.assertEquals(missingResource.getContent().length, 0);
-        Assert.assertEquals(missingResource.getContentType(), "application/empty-response");
-
-        RGridResource unknownHostResource = missingResources.get(unknownHostUrl);
-        Assert.assertEquals(unknownHostResource.getUrl(), unknownHostUrl);
-        Assert.assertEquals(unknownHostResource.getContent().length, 0);
-        Assert.assertEquals(unknownHostResource.getContentType(), "application/empty-response");
+        // Only one empty resource will be sent to the server
+        Assert.assertEquals(missingResources.size(), 1);
     }
 
     @Test

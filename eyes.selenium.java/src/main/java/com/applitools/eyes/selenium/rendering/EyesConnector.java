@@ -9,12 +9,10 @@ import com.applitools.eyes.visualgrid.model.*;
 import com.applitools.eyes.visualgrid.services.IEyesConnector;
 import com.applitools.eyes.visualgrid.services.VisualGridTask;
 import com.applitools.utils.ClassVersionGetter;
-import com.applitools.utils.EyesSyncObject;
 
 import java.net.URI;
 import java.util.List;
 import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicReference;
 
 class EyesConnector extends EyesBase implements IEyesConnector, IBatchCloser {
     private final RenderBrowserInfo browserInfo;
@@ -50,34 +48,22 @@ class EyesConnector extends EyesBase implements IEyesConnector, IBatchCloser {
         return getServerConnector().downloadResource(url, userAgent, refererUrl, listener);
     }
 
-    public Future<?> renderPutResource(RunningRender runningRender, RGridResource resource, String userAgent, TaskListener<Boolean> listener) {
-        return getServerConnector().renderPutResource(runningRender, resource, userAgent, listener);
+    @Override
+    public Future<?> renderPutResource(String renderId, RGridResource resource, TaskListener<Void> listener) {
+        return getServerConnector().renderPutResource(renderId, resource, listener);
     }
 
+    @Override
     public List<RunningRender> render(RenderRequest... renderRequests) {
-        final AtomicReference<List<RunningRender>> reference = new AtomicReference<>();
-        final AtomicReference<EyesSyncObject> lock = new AtomicReference<>(new EyesSyncObject(logger, "render"));
-        getServerConnector().render(new SyncTaskListener<>(lock, reference), renderRequests);
-        synchronized (lock.get()) {
-            try {
-                lock.get().waitForNotify();
-            } catch (InterruptedException ignored) {}
-        }
-
-        return reference.get();
+        SyncTaskListener<List<RunningRender>> listener = new SyncTaskListener<>(logger, "render");
+        getServerConnector().render(listener, renderRequests);
+        return listener.get();
     }
 
     public List<RenderStatusResults> renderStatusById(String... renderIds) {
-        final AtomicReference<List<RenderStatusResults>> reference = new AtomicReference<>();
-        final AtomicReference<EyesSyncObject> lock = new AtomicReference<>(new EyesSyncObject(logger, "renderStatusById"));
-        getServerConnector().renderStatusById(new SyncTaskListener<>(lock, reference), renderIds);
-        synchronized (lock.get()) {
-            try {
-                lock.get().waitForNotify();
-            } catch (InterruptedException ignored) {}
-        }
-
-        return reference.get();
+        final SyncTaskListener<List<RenderStatusResults>> listener = new SyncTaskListener<>(logger, "renderStatusById");
+        getServerConnector().renderStatusById(listener, renderIds);
+        return listener.get();
     }
 
     public MatchResult matchWindow(String resultImageURL, String domLocation, ICheckSettings checkSettings,
@@ -201,6 +187,11 @@ class EyesConnector extends EyesBase implements IEyesConnector, IBatchCloser {
 
     public RunningSession getSession() {
         return this.runningSession;
+    }
+
+    @Override
+    public void checkResourceStatus(TaskListener<Boolean[]> listener, String renderId, HashObject... hashes) {
+        getServerConnector().checkResourceStatus(listener, renderId, hashes);
     }
 
     protected RectangleSize getViewportSizeForOpen() {

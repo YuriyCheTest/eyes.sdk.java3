@@ -1,4 +1,14 @@
-[3.181.0] - 2020-10-16
+## [vNext]
+### Updated
+- Moved `open` to be before `render`. [Trello 2152](https://trello.com/c/yNzhBkBh)
+- Using server concurrency limitations. [Trello 2152](https://trello.com/c/yNzhBkBh)
+- Separated resource collection from the rendering task. [Trello 2152](https://trello.com/c/yNzhBkBh)
+- Removing resource contents after uploading to the server. [Trello 2152](https://trello.com/c/yNzhBkBh)
+- Checking resources status and uploading missing resources before rendering. [Trello 2152](https://trello.com/c/yNzhBkBh)
+### Fixed
+- Fixed `DeviceSize` class to use `landscape` field. [Trello 2150](https://trello.com/c/8xXBu5Wk)
+
+## [3.181.0] - 2020-10-16
 ### Added
 - A new API for closing batch explicitly: `BatchClose`. [Trello 2189](https://trello.com/c/SlHH9Ssb)
 - A new log handler for sending logs to the eyes server. [Trello 2206](https://trello.com/c/EX8JfK7W)
@@ -8,7 +18,7 @@
 ### Updated
 - Removed appium dependency from eyes-selenium-common module. [Trello 2188](https://trello.com/c/uTbDNRdf)
 
-[3.180.0] - 2020-10-09
+## [3.180.0] - 2020-10-09
 ### Updated
 - DeviceName now includes new mobile devices. [Trello 1751](https://trello.com/c/JOyUqzEM)
 - IosDeviceInfo includes the version property. [Trello 2187](https://trello.com/c/25AjSV6V)
@@ -16,7 +26,7 @@
 ### Fixed
 - DOM capture now parses CSS correctly. [Trello 2173](https://trello.com/c/ccXQpdKy)
 
-[3.179.0] - 2020-10-01 
+## [3.179.0] - 2020-10-01
 ### Added
 - New API for setting `deviceInfo`, `hostingAppInfo` and `osInfo` in the configuration. [Trello 2140](https://trello.com/c/vGSi2NFz)
 ### Updated

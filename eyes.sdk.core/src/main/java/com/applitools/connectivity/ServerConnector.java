@@ -9,7 +9,6 @@ import com.applitools.eyes.locators.VisualLocatorsData;
 import com.applitools.eyes.logging.LogSessionsClientEvents;
 import com.applitools.eyes.visualgrid.model.*;
 import com.applitools.utils.ArgumentGuard;
-import com.applitools.utils.EyesSyncObject;
 import com.applitools.utils.GeneralUtils;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -24,13 +23,13 @@ import javax.ws.rs.core.MediaType;
 import java.io.IOException;
 import java.net.URI;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class ServerConnector extends UfgConnector {
 
     static final String CLOSE_BATCH = "api/sessions/batches/%s/close/bypointerid";
     static final String RENDER_STATUS = "/render-status";
     static final String RENDER = "/render";
+    static final String RESOURCE_STATUS = "/query/resources-exist";
     static final String MOBILE_DEVICES_PATH = "/app/info/mobile/devices";
     public static final String API_PATH = "/api/sessions/running";
     private static final String LOG_PATH = "/api/sessions/log";
@@ -124,7 +123,7 @@ public class ServerConnector extends UfgConnector {
                     "sessionStartInfo into Json string!", e);
         }
 
-        AsyncRequest request = makeEyesRequest(new HttpRequestBuilder() {
+        final AsyncRequest request = makeEyesRequest(new HttpRequestBuilder() {
             @Override
             public AsyncRequest build() {
                 return restClient.target(serverUrl).path(API_PATH)
@@ -136,6 +135,13 @@ public class ServerConnector extends UfgConnector {
             @Override
             public void onComplete(Response response) {
                 try {
+                    if (response.getStatusCode() == HttpStatus.SC_SERVICE_UNAVAILABLE) {
+                        RunningSession runningSession = new RunningSession();
+                        runningSession.setConcurrencyFull(true);
+                        listener.onComplete(runningSession);
+                        return;
+                    }
+
                     List<Integer> validStatusCodes = new ArrayList<>();
                     validStatusCodes.add(HttpStatus.SC_OK);
                     validStatusCodes.add(HttpStatus.SC_CREATED);
@@ -143,6 +149,8 @@ public class ServerConnector extends UfgConnector {
                     if (runningSession.getIsNew() == null) {
                         runningSession.setIsNew(response.getStatusCode() == HttpStatus.SC_CREATED);
                     }
+
+                    runningSession.setConcurrencyFull(false);
                     listener.onComplete(runningSession);
                 } catch (Throwable t) {
                     onFail(t);
@@ -254,8 +262,8 @@ public class ServerConnector extends UfgConnector {
     public void render(final TaskListener<List<RunningRender>> listener, RenderRequest... renderRequests) {
         ArgumentGuard.notNull(renderRequests, "renderRequests");
         this.logger.verbose("called with " + Arrays.toString(renderRequests));
-        AsyncRequest request = restClient.target(renderingInfo.getServiceUrl()).path(RENDER).asyncRequest(MediaType.APPLICATION_JSON);
-        request.header("X-Auth-Token", renderingInfo.getAccessToken());
+        AsyncRequest request = restClient.target(renderingInfo.get().getServiceUrl()).path(RENDER).asyncRequest(MediaType.APPLICATION_JSON);
+        request.header("X-Auth-Token", renderingInfo.get().getAccessToken());
         List<Integer> validStatusCodes = new ArrayList<>();
         validStatusCodes.add(HttpStatus.SC_OK);
         validStatusCodes.add(HttpStatus.SC_NOT_FOUND);
@@ -290,10 +298,10 @@ public class ServerConnector extends UfgConnector {
             AsyncRequest request = makeEyesRequest(new HttpRequestBuilder() {
                 @Override
                 public AsyncRequest build() {
-                    return restClient.target(renderingInfo.getServiceUrl()).path((RENDER_STATUS)).asyncRequest(MediaType.TEXT_PLAIN);
+                    return restClient.target(renderingInfo.get().getServiceUrl()).path((RENDER_STATUS)).asyncRequest(MediaType.TEXT_PLAIN);
                 }
             });
-            request.header("X-Auth-Token", renderingInfo.getAccessToken());
+            request.header("X-Auth-Token", renderingInfo.get().getAccessToken());
 
             List<Integer> validStatusCodes = new ArrayList<>();
             validStatusCodes.add(HttpStatus.SC_OK);
@@ -328,6 +336,28 @@ public class ServerConnector extends UfgConnector {
             }, new TypeReference<RenderStatusResults[]>() {});
             sendAsyncRequest(request, HttpMethod.POST, callback, json, MediaType.APPLICATION_JSON);
         } catch (Exception e) {
+            GeneralUtils.logExceptionStackTrace(logger, e);
+            listener.onComplete(null);
+        }
+    }
+
+    public void checkResourceStatus(final TaskListener<Boolean[]> listener, String renderId, HashObject... hashes) {
+        try {
+            ArgumentGuard.notNull(hashes, "hashes");
+            renderId = renderId == null ? "NONE" : renderId;
+            AsyncRequest request = restClient.target(renderingInfo.get().getServiceUrl()).queryParam("rg_render-id", renderId)
+                    .path(RESOURCE_STATUS).asyncRequest(MediaType.APPLICATION_JSON);
+            request.header("X-Auth-Token", renderingInfo.get().getAccessToken());
+            List<Integer> validStatusCodes = new ArrayList<>();
+            validStatusCodes.add(HttpStatus.SC_OK);
+
+            ObjectMapper objectMapper = new ObjectMapper();
+            objectMapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
+            objectMapper.configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true);
+            String json = objectMapper.writeValueAsString(hashes);
+            ResponseParsingCallback<Boolean[]> callback = new ResponseParsingCallback<>(this, validStatusCodes, listener, new TypeReference<Boolean[]>() {});
+            sendAsyncRequest(request, HttpMethod.POST, callback, json, MediaType.APPLICATION_JSON);
+        } catch (Throwable e) {
             GeneralUtils.logExceptionStackTrace(logger, e);
             listener.onComplete(null);
         }
@@ -386,21 +416,15 @@ public class ServerConnector extends UfgConnector {
     }
 
     public void closeBatch(String batchId, boolean forceClose, String url) {
-        final AtomicReference<EyesSyncObject> lock = new AtomicReference<>(new EyesSyncObject(logger, "closeBatch"));
         boolean dontCloseBatchesStr = GeneralUtils.getDontCloseBatches();
         if (dontCloseBatchesStr && !forceClose) {
             logger.log("APPLITOOLS_DONT_CLOSE_BATCHES environment variable set to true. Skipping batch close.");
             return;
         }
 
-        closeBatchAsync(new SyncTaskListener<Void>(lock), batchId, forceClose, url);
-        synchronized (lock.get()) {
-            try {
-                lock.get().waitForNotify();
-            } catch (InterruptedException e) {
-                throw new EyesException("Failed waiting for close batch", e);
-            }
-        }
+        SyncTaskListener<Void> listener = new SyncTaskListener<>(logger, "closeBatch");
+        closeBatchAsync(listener, batchId, forceClose, url);
+        listener.get();
     }
 
     public void closeBatchAsync(final TaskListener<Void> listener, String batchId, boolean forceClose, final String url) {

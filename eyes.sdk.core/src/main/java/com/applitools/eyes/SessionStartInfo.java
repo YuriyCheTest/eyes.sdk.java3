@@ -3,7 +3,6 @@
  */
 package com.applitools.eyes;
 
-import com.applitools.eyes.config.Configuration;
 import com.applitools.utils.ArgumentGuard;
 import com.fasterxml.jackson.annotation.JsonRootName;
 
@@ -35,6 +34,8 @@ public class SessionStartInfo {
     private Boolean saveDiffs;
     private ImageMatchSettings defaultMatchSettings;
     private List<PropertyData> properties;
+    private String agentSessionId;
+    private final int concurrencyVersion = 1;
 
     public SessionStartInfo(String agentId, SessionType sessionType,
                             String appIdOrName, String verId,
@@ -43,8 +44,7 @@ public class SessionStartInfo {
                             AppEnvironment environment,
                             ImageMatchSettings defaultMatchSettings,
                             String branchName, String parentBranchName, String baselineBranchName,
-                            Boolean saveDiffs,
-                            List<PropertyData> properties) {
+                            Boolean saveDiffs, List<PropertyData> properties, String agentSessionId) {
         ArgumentGuard.notNullOrEmpty(agentId, "agentId");
         ArgumentGuard.notNullOrEmpty(appIdOrName, "appIdOrName");
         ArgumentGuard.notNullOrEmpty(scenarioIdOrName, "scenarioIdOrName");
@@ -66,34 +66,7 @@ public class SessionStartInfo {
         this.baselineBranchName = baselineBranchName;
         this.saveDiffs = saveDiffs;
         this.properties = properties;
-    }
-
-
-    public SessionStartInfo(Configuration config,
-                            String agentId,
-                            String verId,
-                            AppEnvironment environment,
-                            ImageMatchSettings defaultMatchSettings,
-                            List<PropertyData> properties) {
-        ArgumentGuard.notNull(config, "config");
-        ArgumentGuard.notNullOrEmpty(agentId, "agentId");
-        ArgumentGuard.notNull(environment, "environment");
-        ArgumentGuard.notNull(defaultMatchSettings, "defaultMatchSettings");
-        this.agentId = agentId;
-        this.sessionType = config.getSessionType();
-        this.appIdOrName = config.getAppName();
-        this.verId = verId;
-        this.scenarioIdOrName = config.getTestName();
-        this.batchInfo = config.getBatch();
-        this.baselineEnvName = config.getBaselineEnvName();
-        this.environmentName = config.getEnvironmentName();
-        this.environment = environment;
-        this.defaultMatchSettings = defaultMatchSettings;
-        this.branchName = config.getBranchName();
-        this.parentBranchName = config.getParentBranchName();
-        this.baselineBranchName = config.getBaselineBranchName();
-        this.saveDiffs = config.getSaveDiffs();
-        this.properties = properties;
+        this.agentSessionId = agentSessionId;
     }
 
     public SessionStartInfo() {}
@@ -156,5 +129,13 @@ public class SessionStartInfo {
 
     public List<PropertyData> getProperties() {
         return properties;
+    }
+
+    public String getAgentSessionId() {
+        return agentSessionId;
+    }
+
+    public int getConcurrencyVersion() {
+        return concurrencyVersion;
     }
 }

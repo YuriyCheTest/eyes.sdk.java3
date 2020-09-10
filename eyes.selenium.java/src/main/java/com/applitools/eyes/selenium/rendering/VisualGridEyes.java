@@ -43,7 +43,6 @@ public class VisualGridEyes implements ISeleniumEyes, IRenderingEyes {
 
     private final VisualGridRunner renderingGridRunner;
     private final List<RunningTest> testList = Collections.synchronizedList(new ArrayList<RunningTest>());
-    private final List<RunningTest> testsInCloseProcess = Collections.synchronizedList(new ArrayList<RunningTest>());
     List<TestResultContainer> allTestResults = new ArrayList<>();
 
     private String PROCESS_PAGE;
@@ -176,7 +175,7 @@ public class VisualGridEyes implements ISeleniumEyes, IRenderingEyes {
 
         for (RenderBrowserInfo browserInfo : browserInfoList) {
             logger.verbose("creating test descriptor");
-            RunningTest test = new RunningTest(this, createVGEyesConnector(browserInfo), configurationProvider, browserInfo, logger);
+            RunningTest test = new RunningTest(this, createEyesConnector(browserInfo), configurationProvider, browserInfo, logger);
             this.testList.add(test);
         }
 
@@ -221,41 +220,41 @@ public class VisualGridEyes implements ISeleniumEyes, IRenderingEyes {
         }
     }
 
-    private IEyesConnector createVGEyesConnector(RenderBrowserInfo browserInfo) {
+    private IEyesConnector createEyesConnector(RenderBrowserInfo browserInfo) {
         logger.verbose("creating VisualGridEyes server connector");
-        EyesConnector VGEyesConnector = new EyesConnector(getConfiguration(), this.properties, browserInfo);
+        EyesConnector eyesConnector = new EyesConnector(getConfiguration(), this.properties, browserInfo);
         if (browserInfo.getEmulationInfo() != null) {
-            VGEyesConnector.setDevice(browserInfo.getEmulationInfo().getDeviceName() + " (Chrome emulation)");
+            eyesConnector.setDevice(browserInfo.getEmulationInfo().getDeviceName() + " (Chrome emulation)");
         } else if (browserInfo.getIosDeviceInfo() != null) {
-            VGEyesConnector.setDevice(browserInfo.getIosDeviceInfo().getDeviceName());
+            eyesConnector.setDevice(browserInfo.getIosDeviceInfo().getDeviceName());
         }
 
-        VGEyesConnector.setLogHandler(this.logger.getLogHandler());
-        VGEyesConnector.setProxy(this.getConfiguration().getProxy());
+        eyesConnector.setLogHandler(this.logger.getLogHandler());
+        eyesConnector.setProxy(this.getConfiguration().getProxy());
         if (serverConnector != null) {
-            VGEyesConnector.setServerConnector(serverConnector);
+            eyesConnector.setServerConnector(serverConnector);
         }
 
         URI serverUri = this.getServerUrl();
         if (serverUri != null) {
-            VGEyesConnector.setServerUrl(serverUri.toString());
+            eyesConnector.setServerUrl(serverUri.toString());
         }
 
         String apiKey = this.getApiKey();
         if (apiKey != null) {
-            VGEyesConnector.setApiKey(apiKey);
+            eyesConnector.setApiKey(apiKey);
         } else {
             throw new EyesException("Missing API key");
         }
 
         if (this.renderingInfo == null) {
             logger.verbose("initializing rendering info...");
-            this.renderingInfo = VGEyesConnector.getRenderingInfo();
+            this.renderingInfo = eyesConnector.getRenderingInfo();
         }
-        VGEyesConnector.setRenderInfo(this.renderingInfo);
+        eyesConnector.setRenderInfo(this.renderingInfo);
 
-        this.VGEyesConnector = VGEyesConnector;
-        return VGEyesConnector;
+        this.VGEyesConnector = eyesConnector;
+        return eyesConnector;
     }
 
     private void initDriver(WebDriver webDriver) {
@@ -268,13 +267,10 @@ public class VisualGridEyes implements ISeleniumEyes, IRenderingEyes {
     }
 
     public RunningTest getNextTestToClose() {
-        synchronized (testsInCloseProcess) {
-            synchronized (testList) {
-                for (RunningTest runningTest : testList) {
-                    if (!runningTest.isTestClose() && runningTest.isTestReadyToClose() &&
-                            !this.testsInCloseProcess.contains(runningTest)) {
-                        return runningTest;
-                    }
+        synchronized (testList) {
+            for (RunningTest runningTest : testList) {
+                if (!runningTest.isTestClose() && runningTest.isTestReadyToClose()) {
+                    return runningTest;
                 }
             }
         }
@@ -447,7 +443,9 @@ public class VisualGridEyes implements ISeleniumEyes, IRenderingEyes {
             VisualGridTask visualGridTask;
             //noinspection SynchronizationOnLocalVariableOrMethodParameter
             synchronized (visualGridTaskList) {
-                if (visualGridTaskList.isEmpty()) continue;
+                if (visualGridTaskList.isEmpty()) {
+                    continue;
+                }
 
                 visualGridTask = visualGridTaskList.get(0);
                 if (!runningTest.isTestOpen() || visualGridTask.getType() != VisualGridTask.TaskType.CHECK || !visualGridTask.isTaskReadyToCheck())
@@ -457,7 +455,9 @@ public class VisualGridEyes implements ISeleniumEyes, IRenderingEyes {
 
             ScoreTask scoreTask = runningTest.getScoreTaskObjectByType(VisualGridTask.TaskType.CHECK);
 
-            if (scoreTask == null) continue;
+            if (scoreTask == null) {
+                continue;
+            }
 
             if (bestScore < scoreTask.getScore()) {
                 currentBest = scoreTask;
@@ -473,14 +473,14 @@ public class VisualGridEyes implements ISeleniumEyes, IRenderingEyes {
         ScoreTask currentBest = null;
         synchronized (testList) {
             for (RunningTest runningTest : testList) {
-
                 ScoreTask currentScoreTask = runningTest.getScoreTaskObjectByType(VisualGridTask.TaskType.OPEN);
-                if (currentScoreTask == null) continue;
+                if (currentScoreTask == null) {
+                    continue;
+                }
 
                 if (bestMark < currentScoreTask.getScore()) {
                     bestMark = currentScoreTask.getScore();
                     currentBest = currentScoreTask;
-
                 }
             }
         }
@@ -545,8 +545,8 @@ public class VisualGridEyes implements ISeleniumEyes, IRenderingEyes {
 
             isCheckTimerTimedOut.set(false);
 
-            List<VisualGridTask> openVisualGridTasks = addOpenTaskToAllRunningTest();
-            List<VisualGridTask> visualGridTaskList = new ArrayList<>();
+            addOpenTaskToAllRunningTest();
+            List<VisualGridTask> checkVisualGridTasks = new ArrayList<>();
 
             FrameData scriptResult = captureDomSnapshot(originalFC, switchTo, checkSettingsInternal);
 
@@ -563,24 +563,13 @@ public class VisualGridEyes implements ISeleniumEyes, IRenderingEyes {
             String source = webDriver.getCurrentUrl();
             for (RunningTest runningTest : filteredTests) {
                 VisualGridTask checkVisualGridTask = runningTest.check((ICheckSettings) checkSettingsInternal, regionsXPaths, source);
-                visualGridTaskList.add(checkVisualGridTask);
+                checkVisualGridTasks.add(checkVisualGridTask);
             }
 
-            logger.verbose(String.format("added %d check tasks", visualGridTaskList.size()));
+            logger.verbose(String.format("added %d check tasks", checkVisualGridTasks.size()));
 
             this.renderingGridRunner.check((ICheckSettings) checkSettingsInternal, debugResourceWriter, scriptResult,
-                    this.VGEyesConnector, visualGridTaskList, openVisualGridTasks,
-                    new VisualGridRunner.RenderListener() {
-                        @Override
-                        public void onRenderSuccess() {
-
-                        }
-
-                        @Override
-                        public void onRenderFailed(Exception e) {
-                            GeneralUtils.logExceptionStackTrace(logger, e);
-                        }
-                    }, regionsXPaths, userAgent);
+                    this.VGEyesConnector, checkVisualGridTasks, regionsXPaths, userAgent);
             logger.verbose("created renderTask  (" + checkSettings.toString() + ")");
             switchTo.frames(originalFC);
         } catch (Throwable e) {
@@ -807,18 +796,14 @@ public class VisualGridEyes implements ISeleniumEyes, IRenderingEyes {
         frame.setScrollRootElement(rootElement);
     }
 
-    private synchronized List<VisualGridTask> addOpenTaskToAllRunningTest() {
-        logger.verbose(String.format("Add open tasks for %d tests", testList.size()));
-        List<VisualGridTask> visualGridTasks = new ArrayList<>();
+    private synchronized void addOpenTaskToAllRunningTest() {
+    logger.verbose(String.format("Add open tasks for %d tests", testList.size()));
         for (RunningTest runningTest : testList) {
             if (!runningTest.isOpenTaskIssued()) {
-                VisualGridTask visualGridTask = runningTest.open();
-                visualGridTasks.add(visualGridTask);
+                runningTest.open();
             }
         }
-        logger.verbose("calling addOpenTaskToAllRunningTest.open");
         logger.verbose("exit");
-        return visualGridTasks;
     }
 
     public Logger getLogger() {
@@ -1027,5 +1012,16 @@ public class VisualGridEyes implements ISeleniumEyes, IRenderingEyes {
         }
 
         return tasks;
+    }
+
+    @Override
+    public boolean isServerConcurrencyLimitReached() {
+        for (RunningTest runningTest : testList) {
+            if (runningTest.isServerConcurrencyLimitReached()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

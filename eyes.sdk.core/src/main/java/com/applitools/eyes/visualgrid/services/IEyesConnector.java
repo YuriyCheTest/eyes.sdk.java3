@@ -33,7 +33,7 @@ public interface IEyesConnector {
 
     RenderingInfo getRenderingInfo();
 
-    Future<?> renderPutResource(RunningRender runningRender, RGridResource resource, String userAgent, TaskListener<Boolean> listener);
+    Future<?> renderPutResource(String renderId, RGridResource resource, TaskListener<Void> listener);
 
     List<RunningRender> render(RenderRequest... renderRequests);
 
@@ -74,4 +74,8 @@ public interface IEyesConnector {
     Map<String, String> getUserAgents();
 
     ServerConnector getServerConnector();
+
+    boolean isServerConcurrencyLimitReached();
+
+    void checkResourceStatus(final TaskListener<Boolean[]> listener, String renderId, HashObject... hashes);
 }

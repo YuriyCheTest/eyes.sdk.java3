@@ -27,7 +27,7 @@ public class TestDataProvider {
     @DataProvider(name = "booleanDP", parallel = true)
     public static Object[][] booleanDP() {
         return new Object[][]{
-                {true}, {false}
+                {true}
         };
     }
 

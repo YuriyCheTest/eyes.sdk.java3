@@ -32,7 +32,6 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Applitools Eyes Base for Java API .
@@ -40,7 +39,8 @@ import java.util.concurrent.atomic.AtomicReference;
 public abstract class EyesBase implements IEyesBase {
 
     protected static final int USE_DEFAULT_TIMEOUT = -1;
-    private static final int MAX_ITERATION = 10;
+    private static final int TIME_TO_WAIT_FOR_OPEN = 70 * 1000;
+    private static final int TIME_THRESHOLD = 20 * 1000;
 
     private boolean shouldMatchWindowRunOnceOnTimeout;
 
@@ -60,6 +60,7 @@ public abstract class EyesBase implements IEyesBase {
     protected Logger logger;
 
     protected boolean isOpen;
+    private boolean isServerConcurrencyLimitReached = false;
 
     private final Queue<Trigger> userInputs;
     private final List<PropertyData> properties = new ArrayList<>();
@@ -459,20 +460,9 @@ public abstract class EyesBase implements IEyesBase {
      *                             is true.
      */
     public TestResults close(boolean throwEx) {
-        AtomicReference<TestResults> reference = new AtomicReference<>();
-        final AtomicReference<EyesSyncObject> lock = new AtomicReference<>(new EyesSyncObject(logger, "close"));
-        close(new SyncTaskListener<>(lock, reference), throwEx);
-        synchronized (lock.get()) {
-            try {
-                if (reference.get() == null) {
-                    lock.get().waitForNotify();
-                }
-            } catch (InterruptedException e) {
-                throw new EyesException("Failed waiting for close", e);
-            }
-        }
-
-        TestResults testResults = reference.get();
+        SyncTaskListener<TestResults> listener = new SyncTaskListener<>(logger, "close");
+        close(listener, throwEx);
+        TestResults testResults = listener.get();
         if (testResults == null) {
             throw new EyesException("Failed closing test");
         }
@@ -562,20 +552,9 @@ public abstract class EyesBase implements IEyesBase {
     }
 
     public TestResults abortIfNotClosed() {
-        AtomicReference<TestResults> reference = new AtomicReference<>();
-        final AtomicReference<EyesSyncObject> lock = new AtomicReference<>(new EyesSyncObject(logger, "abortIfNotClosed"));
-        abortIfNotClosed(new SyncTaskListener<>(lock, reference));
-        synchronized (lock.get()) {
-            try {
-                if (reference.get() == null) {
-                    lock.get().waitForNotify();
-                }
-            } catch (InterruptedException e) {
-                throw new EyesException("Failed waiting for abort", e);
-            }
-        }
-
-        TestResults testResults = reference.get();
+        SyncTaskListener<TestResults> listener = new SyncTaskListener<>(logger, "abortIfNotClosed");
+        abortIfNotClosed(listener);
+        TestResults testResults = listener.get();
         if (testResults == null) {
             throw new EyesException("Failed stopping session");
         }
@@ -704,9 +683,7 @@ public abstract class EyesBase implements IEyesBase {
     }
 
     protected MatchResult checkWindowBase(Region region, ICheckSettingsInternal checkSettingsInternal, String source) {
-
         MatchResult result;
-
         if (getIsDisabled()) {
             logger.verbose("Ignored");
             result = new MatchResult();
@@ -720,18 +697,6 @@ public abstract class EyesBase implements IEyesBase {
         }
 
         ArgumentGuard.isValidState(getIsOpen(), "Eyes not open");
-
-        if (runningSession == null) {
-            final AtomicReference<EyesSyncObject> lock = new AtomicReference<>(new EyesSyncObject(logger, "checkWindowBase"));
-            ensureRunningSession(new SyncTaskListener<Void>(lock));
-            synchronized (lock.get()) {
-                try {
-                    lock.get().waitForNotify();
-                } catch (InterruptedException e) {
-                    throw new EyesException("Failed waiting for open", e);
-                }
-            }
-        }
 
         result = matchWindow(region, tag, checkSettingsInternal, source);
 
@@ -820,16 +785,9 @@ public abstract class EyesBase implements IEyesBase {
     }
 
     protected void openBase() throws EyesException {
-        final AtomicReference<EyesSyncObject> lock = new AtomicReference<>(new EyesSyncObject(logger, "openBase"));
-        openBaseAsync(new SyncTaskListener<Void>(lock));
-        synchronized (lock.get()) {
-            try {
-                lock.get().waitForNotify();
-            } catch (InterruptedException e) {
-                throw new EyesException("Failed waiting for open", e);
-            }
-        }
-
+        SyncTaskListener<Void> listener = new SyncTaskListener<>(logger, "openBase");
+        openBaseAsync(listener);
+        listener.get();
         if (!isOpen) {
             throw new EyesException("Failed starting session with the server");
         }
@@ -864,47 +822,48 @@ public abstract class EyesBase implements IEyesBase {
             return;
         }
 
-        final AtomicInteger attemptNumber = new AtomicInteger(0);
-        final TaskListener<Void> listener = new TaskListener<Void>() {
-            @Override
-            public void onComplete(Void unused) {
-                validationId = -1;
-                isOpen = true;
-                taskListener.onComplete(null);
-            }
+        if (getServerConnector() == null) {
+            throw new EyesException("server connector not set.");
+        }
+        ensureViewportSize();
 
-            @Override
-            public void onFail() {
-                if (attemptNumber.incrementAndGet() < MAX_ITERATION) {
-                    try {
-                        ensureRunningSession(this);
-                        return;
-                    } catch (Throwable e) {
-                        GeneralUtils.logExceptionStackTrace(logger, e);
-                    }
+        Configuration configGetter = getConfigurationInstance();
+        BatchInfo testBatch = configGetter.getBatch();
+        if (testBatch == null) {
+            logger.verbose("No batch set");
+            getConfigurationInstance().setBatch(new BatchInfo(null));
+        } else {
+            logger.verbose("Batch is " + testBatch);
+        }
 
-                }
-                taskListener.onFail();
-            }
-        };
 
-        ensureRunningSession(listener);
-    }
+        String agentSessionId = UUID.randomUUID().toString();
+        sessionStartInfo = new SessionStartInfo(getFullAgentId(), configGetter.getSessionType(), getAppName(),
+                null, getTestName(), configGetter.getBatch(), getBaselineEnvName(), configGetter.getEnvironmentName(),
+                getAppEnvironment(), configGetter.getDefaultMatchSettings(), configGetter.getBranchName(),
+                configGetter.getParentBranchName(), configGetter.getBaselineBranchName(), configGetter.getSaveDiffs(),
+                properties, agentSessionId);
 
-    protected RectangleSize getViewportSizeForOpen() {
-        return getConfigurationInstance().getViewportSize();
-    }
+        sessionEventHandlers.initEnded();
 
-    protected void ensureRunningSession(final TaskListener<Void> listener) {
-        logger.log("No running session, calling start session...");
-        startSession(new TaskListener<RunningSession>() {
+        final AtomicInteger timePassed = new AtomicInteger(0);
+        final AtomicInteger sleepDuration = new AtomicInteger(5 * 1000);
+        final TaskListener<RunningSession> listener = new TaskListener<RunningSession>() {
             @Override
             public void onComplete(RunningSession result) {
+                String testName = "'" + getTestName() + "'";
+                if (result.isConcurrencyFull()) {
+                    isServerConcurrencyLimitReached = true;
+                    logger.verbose(String.format("Failed starting test %s, concurrency is fully used. Trying again.", testName));
+                    onFail();
+                    return;
+                }
+
+                isServerConcurrencyLimitReached = false;
                 runningSession = result;
                 logger.verbose("Server session ID is " + runningSession.getId());
 
                 logger.setSessionId(runningSession.getSessionId());
-                String testName = "'" + getTestName() + "'";
                 if (runningSession.getIsNew()) {
                     logger.log("--- New test started - " + testName);
                     shouldMatchWindowRunOnceOnTimeout = true;
@@ -930,14 +889,39 @@ public abstract class EyesBase implements IEyesBase {
                         }
                 );
 
-                listener.onComplete(null);
+                validationId = -1;
+                isOpen = true;
+                taskListener.onComplete(null);
             }
 
             @Override
             public void onFail() {
-                listener.onFail();
+                if (timePassed.get() > TIME_TO_WAIT_FOR_OPEN) {
+                    isServerConcurrencyLimitReached = false;
+                    taskListener.onFail();
+                    return;
+                }
+
+                try {
+                    Thread.sleep(sleepDuration.get());
+                    timePassed.set(timePassed.get() + sleepDuration.get());
+                    if (timePassed.get() > TIME_THRESHOLD) {
+                        sleepDuration.set(10 * 1000);
+                    }
+                    startSession(this);
+                } catch (Throwable e) {
+                    GeneralUtils.logExceptionStackTrace(logger, e);
+                    taskListener.onFail();
+                }
             }
-        });
+        };
+
+        logger.log(String.format("Calling start session with agentSessionId %s", agentSessionId));
+        startSession(listener);
+    }
+
+    protected RectangleSize getViewportSizeForOpen() {
+        return getConfigurationInstance().getViewportSize();
     }
 
     private void validateApiKey() {
@@ -1156,36 +1140,10 @@ public abstract class EyesBase implements IEyesBase {
      * Start eyes session on the eyes server.
      */
     protected void startSession(TaskListener<RunningSession> listener) {
-        logger.verbose("startSession()");
-        if (getServerConnector() == null) {
-            throw new EyesException("server connector not set.");
-        }
-        ensureViewportSize();
-
-        Configuration configGetter = getConfigurationInstance();
-        BatchInfo testBatch = configGetter.getBatch();
-        if (testBatch == null) {
-            logger.verbose("No batch set");
-            getConfigurationInstance().setBatch(new BatchInfo(null));
-        } else {
-            logger.verbose("Batch is " + testBatch);
-        }
-
-        AppEnvironment appEnv = getAppEnvironment();
-
-        sessionEventHandlers.initEnded();
-
-        logger.verbose("Application environment is " + appEnv);
-
-        String appName = getAppName();
-        sessionStartInfo = new SessionStartInfo(getFullAgentId(), configGetter.getSessionType(), appName,
-                null, getTestName(), configGetter.getBatch(), getBaselineEnvName(),
-                configGetter.getEnvironmentName(), getAppEnvironment(), configGetter.getDefaultMatchSettings(),
-                configGetter.getBranchName(),
-                configGetter.getParentBranchName(), configGetter.getBaselineBranchName(), configGetter.getSaveDiffs(), properties);
-
         logger.verbose("Starting server session...");
-        String testInfo = "'" + getTestName() + "' of '" + appName + "' " + appEnv;
+        AppEnvironment appEnv = getAppEnvironment();
+        logger.verbose("Application environment is " + appEnv);
+        String testInfo = "'" + getTestName() + "' of '" + getAppName() + "' " + appEnv;
         logger.log("--- Starting test - " + testInfo);
         getServerConnector().startSession(listener, sessionStartInfo);
     }
@@ -1342,5 +1300,9 @@ public abstract class EyesBase implements IEyesBase {
 
     public void abortAsync() {
         abort();
+    }
+
+    public boolean isServerConcurrencyLimitReached() {
+        return isServerConcurrencyLimitReached;
     }
 }

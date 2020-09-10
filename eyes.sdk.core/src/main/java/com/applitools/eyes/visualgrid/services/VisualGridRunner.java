@@ -1,7 +1,9 @@
 package com.applitools.eyes.visualgrid.services;
 
 import com.applitools.ICheckSettings;
+import com.applitools.connectivity.ServerConnector;
 import com.applitools.eyes.*;
+import com.applitools.eyes.logging.TraceLevel;
 import com.applitools.eyes.visualgrid.model.*;
 import com.applitools.utils.GeneralUtils;
 
@@ -10,29 +12,28 @@ import java.util.concurrent.*;
 
 public class VisualGridRunner extends EyesRunner {
 
-    private final int concurrentOpenSessions;
+    private static final int CONCURRENCY_FACTOR = 5;
 
-    //For Testing...
-    private final Object openerServiceDebugLock;
-    private final Object checkerServiceDebugLock;
-    private final Object closerServiceDebugLock;
-    private final Object renderServiceDebugLock;
+    final int testConcurrency;
 
     private OpenerService eyesOpenerService;
     private EyesService eyesCloserService;
     private EyesService eyesCheckerService;
+    private EyesService resourceCollectionService;
     private RenderingGridService renderingGridService;
     private final ThreadGroup servicesGroup = new ThreadGroup("Services Group");
     private final List<IRenderingEyes> eyesToOpenList = Collections.synchronizedList(new ArrayList<IRenderingEyes>(200));
-    private final Set<IRenderingEyes> allEyes = Collections.synchronizedSet(new HashSet<IRenderingEyes>());
-    private final Map<String, RGridResource> cachedResources = Collections.synchronizedMap(new HashMap<String, RGridResource>());
-    private final Map<String, RGridResource> putResourceCache = Collections.synchronizedMap(new HashMap<String, RGridResource>());
+    final Set<IRenderingEyes> allEyes = Collections.synchronizedSet(new HashSet<IRenderingEyes>());
+    private final Map<String, RGridResource> resourcesCacheMap = Collections.synchronizedMap(new HashMap<String, RGridResource>());
+    private final Map<String, SyncTaskListener<Void>> uploadedResourcesCache = Collections.synchronizedMap(new HashMap<String, SyncTaskListener<Void>>());
 
     private final Object openerServiceConcurrencyLock = new Object();
     private final Object openerServiceLock = new Object();
     private final Object checkerServiceLock = new Object();
     private final Object closerServiceLock = new Object();
+    private final Object resourceCollectionServiceLock = new Object();
     private final Object renderingServiceLock = new Object();
+    private final List<ResourceCollectionTask> resourceCollectionTaskList = Collections.synchronizedList(new ArrayList<ResourceCollectionTask>());
     private final List<RenderingTask> renderingTaskList = Collections.synchronizedList(new ArrayList<RenderingTask>());
 
     private RenderingInfo renderingInfo;
@@ -86,14 +87,6 @@ public class VisualGridRunner extends EyesRunner {
         this.suiteName = suiteName;
     }
 
-    public interface RenderListener {
-
-        void onRenderSuccess();
-
-        void onRenderFailed(Exception e);
-
-    }
-
     @SuppressWarnings("SynchronizationOnLocalVariableOrMethodParameter")
     private FutureTask<TestResultContainer> getOrWaitForTask(Object lock, EyesService.Tasker tasker) {
         FutureTask<TestResultContainer> nextTestToOpen = tasker.getNextTask();
@@ -110,13 +103,6 @@ public class VisualGridRunner extends EyesRunner {
         return nextTestToOpen;
     }
 
-    public void pauseAllService() {
-        eyesOpenerService.debugPauseService();
-        eyesCloserService.debugPauseService();
-        eyesCheckerService.debugPauseService();
-        renderingGridService.debugPauseService();
-    }
-
     private final IRenderingEyes.EyesListener eyesListener = new IRenderingEyes.EyesListener() {
         @Override
         public void onTaskComplete(VisualGridTask visualGridTask, IRenderingEyes eyes) {
@@ -124,7 +110,6 @@ public class VisualGridRunner extends EyesRunner {
             VisualGridTask.TaskType type = visualGridTask.getType();
             try {
                 switch (type) {
-
                     case OPEN:
                         logger.verbose("locking eyesToOpenList");
                         synchronized (eyesToOpenList) {
@@ -161,63 +146,64 @@ public class VisualGridRunner extends EyesRunner {
 
     };
 
-    public VisualGridRunner(int concurrentOpenSessions) {
-        this(concurrentOpenSessions, Thread.currentThread().getStackTrace()[2].getClassName());
+    public VisualGridRunner(int testConcurrency) {
+        this(testConcurrency, Thread.currentThread().getStackTrace()[2].getClassName());
     }
 
-    public VisualGridRunner(int concurrentOpenSessions, String suiteName) {
-        this(concurrentOpenSessions, suiteName, null, null, null, null);
-
+    public VisualGridRunner(RunnerOptions.EnabledRunnerOptions runnerOptions) {
+        this(runnerOptions, Thread.currentThread().getStackTrace()[2].getClassName());
     }
 
-    public VisualGridRunner(int concurrentOpenSessions,
-                            String suiteName,
-                            Object openerServiceDebugLock,
-                            Object checkerServiceDebugLock,
-                            Object closerServiceDebugLock,
-                            Object renderServiceDebugLock) {
+    public VisualGridRunner(int testConcurrency, String suiteName) {
+        NetworkLogHandler.sendSingleLog(new ServerConnector(), TraceLevel.Notice, String.format("testConcurrency: %d", testConcurrency));
+        this.testConcurrency = testConcurrency * CONCURRENCY_FACTOR;
+        NetworkLogHandler.sendSingleLog(new ServerConnector(), TraceLevel.Notice, String.format("testConcurrency after factor: %d", this.testConcurrency));
+        init(suiteName);
+    }
 
+    public VisualGridRunner(RunnerOptions.EnabledRunnerOptions runnerOptions, String suiteName) {
+        this.testConcurrency = runnerOptions.getTestConcurrency();
+        NetworkLogHandler.sendSingleLog(new ServerConnector(), TraceLevel.Notice, String.format("testConcurrency: %d", testConcurrency));
+        init(suiteName);
+    }
+
+    private void init(String suiteName) {
+        this.suiteName = suiteName;
         this.logger = new IdPrintingLogger(suiteName);
         logger.log("runner created");
-        this.suiteName = suiteName;
-        this.concurrentOpenSessions = concurrentOpenSessions;
-        this.openerServiceDebugLock = openerServiceDebugLock;
-        this.checkerServiceDebugLock = checkerServiceDebugLock;
-        this.closerServiceDebugLock = closerServiceDebugLock;
-        this.renderServiceDebugLock = renderServiceDebugLock;
-        init();
+        initServices();
         startServices();
         logger.verbose("rendering grid manager is built");
     }
 
-    public Map<String, RGridResource> getCachedResources() {
-        return cachedResources;
+    public Map<String, RGridResource> getResourcesCacheMap() {
+        return resourcesCacheMap;
     }
 
-    public Map<String, RGridResource> getPutResourceCache() {
-        return putResourceCache;
+    public Map<String, SyncTaskListener<Void>> getUploadedResourcesCache() {
+        return uploadedResourcesCache;
     }
 
     public RenderingInfo getRenderingInfo() {
         return renderingInfo;
     }
 
-    private void init() {
+    private void initServices() {
         this.eyesOpenerService = new OpenerService("eyesOpenerService", servicesGroup,
-                logger, this.concurrentOpenSessions, openerServiceConcurrencyLock, new EyesService.EyesServiceListener() {
+                logger, this.testConcurrency, openerServiceConcurrencyLock, new EyesService.EyesServiceListener() {
             @Override
             public FutureTask<TestResultContainer> getNextTask(EyesService.Tasker tasker) {
                 return getOrWaitForTask(openerServiceLock, tasker);
             }
 
-        }, openerServiceDebugLock, new EyesService.Tasker() {
+        }, new EyesService.Tasker() {
             @Override
             public FutureTask<TestResultContainer> getNextTask() {
                 return getNextTestToOpen();
             }
         });
 
-        this.eyesCloserService = new EyesService("eyesCloserService", servicesGroup, logger, concurrentOpenSessions, closerServiceDebugLock, new EyesService.EyesServiceListener() {
+        this.eyesCloserService = new EyesService("eyesCloserService", servicesGroup, logger, testConcurrency, new EyesService.EyesServiceListener() {
             @Override
             public FutureTask<TestResultContainer> getNextTask(EyesService.Tasker tasker) {
 
@@ -231,7 +217,21 @@ public class VisualGridRunner extends EyesRunner {
             }
         });
 
-        this.renderingGridService = new RenderingGridService("renderingGridService", servicesGroup, logger, this.concurrentOpenSessions, renderServiceDebugLock, new RenderingGridService.RGServiceListener() {
+        this.resourceCollectionService = new EyesService("resourceCollectionService", servicesGroup, logger, testConcurrency,
+                new EyesService.EyesServiceListener() {
+                    @Override
+                    public FutureTask<TestResultContainer> getNextTask(EyesService.Tasker tasker) {
+                        return getOrWaitForTask(resourceCollectionServiceLock, tasker);
+                    }
+                },
+        new EyesService.Tasker() {
+            @Override
+            public FutureTask<TestResultContainer> getNextTask() {
+                return getNextResourceCollectionTask();
+            }
+        });
+
+        this.renderingGridService = new RenderingGridService("renderingGridService", servicesGroup, logger, this.testConcurrency, new RenderingGridService.RGServiceListener() {
             @Override
             public RenderingTask getNextTask() {
                 RenderingTask nextTestToRender = getNextRenderingTask();
@@ -241,7 +241,6 @@ public class VisualGridRunner extends EyesRunner {
                             nextTestToRender = getNextRenderingTask();
                             if (nextTestToRender == null) {
                                 renderingServiceLock.wait(500);
-//                                logger.verbose("Rendering service woke up");
                                 nextTestToRender = getNextRenderingTask();
                             }
 
@@ -252,9 +251,9 @@ public class VisualGridRunner extends EyesRunner {
                 }
                 return nextTestToRender;
             }
-        }, renderingServiceLock);
+        });
 
-        this.eyesCheckerService = new EyesService("eyesCheckerService", servicesGroup, logger, this.concurrentOpenSessions, checkerServiceDebugLock, new EyesService.EyesServiceListener() {
+        this.eyesCheckerService = new EyesService("eyesCheckerService", servicesGroup, logger, this.testConcurrency, new EyesService.EyesServiceListener() {
             @Override
             public FutureTask<TestResultContainer> getNextTask(EyesService.Tasker tasker) {
 
@@ -278,8 +277,10 @@ public class VisualGridRunner extends EyesRunner {
             synchronized (allEyes) {
                 for (IRenderingEyes eyes : allEyes) {
                     ScoreTask currentScoreTask = eyes.getBestScoreTaskForCheck();
+                    if (currentScoreTask == null) {
+                        continue;
+                    }
 
-                    if (currentScoreTask == null) continue;
                     int currentTestMark = currentScoreTask.getScore();
                     if (bestScore < currentTestMark) {
                         bestScoreTask = currentScoreTask;
@@ -300,19 +301,49 @@ public class VisualGridRunner extends EyesRunner {
         return new FutureTask<>(visualGridTask);
     }
 
-    private RenderingTask getNextRenderingTask() {
-        if (this.renderingTaskList.isEmpty()) {
-            return null;
-        }
-        RenderingTask renderingTask = null;
-        synchronized (this.renderingTaskList) {
-            if (!this.renderingTaskList.isEmpty()) {
-                renderingTask = this.renderingTaskList.get(0);
-                this.renderingTaskList.remove(renderingTask);
+    private FutureTask<TestResultContainer> getNextResourceCollectionTask() {
+        synchronized (resourceCollectionTaskList) {
+            if (resourceCollectionTaskList.isEmpty()) {
+                return null;
             }
+
+            ResourceCollectionTask resourceCollectionTask = resourceCollectionTaskList.get(0);
+            resourceCollectionTaskList.remove(resourceCollectionTask);
+            return new FutureTask<>(resourceCollectionTask);
         }
-//        logger.verbose("Starting to renderTask - " + renderingTask);
-        return renderingTask;
+    }
+
+    private RenderingTask getNextRenderingTask() {
+        synchronized (this.renderingTaskList) {
+            if (this.renderingTaskList.isEmpty()) {
+                return null;
+            }
+
+            RenderingTask finalRenderingTask = null;
+            List<RenderingTask> chosenTasks = new ArrayList<>();
+            for (RenderingTask renderingTask : this.renderingTaskList) {
+                if (!renderingTask.isReady()) {
+                    continue;
+                }
+
+                if (finalRenderingTask == null) {
+                    finalRenderingTask = renderingTask;
+                } else {
+                    finalRenderingTask.merge(renderingTask);
+                }
+
+                chosenTasks.add(renderingTask);
+            }
+
+            finalRenderingTask =  finalRenderingTask != null && finalRenderingTask.isReady() ? finalRenderingTask : null;
+
+            if (finalRenderingTask != null) {
+                logger.verbose(String.format("Next rendering task contains %d render requests", chosenTasks.size()));
+                this.renderingTaskList.removeAll(chosenTasks);
+            }
+
+            return finalRenderingTask;
+        }
     }
 
     private FutureTask<TestResultContainer> getNextTestToClose() {
@@ -333,13 +364,19 @@ public class VisualGridRunner extends EyesRunner {
         int bestMark = -1;
         synchronized (allEyes) {
             for (IRenderingEyes eyes : allEyes) {
+                if (eyes.isServerConcurrencyLimitReached()) {
+                    return null;
+                }
+
                 ScoreTask currentTestMark = null;
                 try {
                     currentTestMark = eyes.getBestScoreTaskForOpen();
                 } catch (Exception e) {
                     GeneralUtils.logExceptionStackTrace(logger, e);
                 }
-                if (currentTestMark == null) continue;
+                if (currentTestMark == null) {
+                    continue;
+                }
                 int currentScore = currentTestMark.getScore();
                 if (bestMark < currentScore) {
                     bestMark = currentScore;
@@ -388,6 +425,7 @@ public class VisualGridRunner extends EyesRunner {
         this.servicesGroup.setDaemon(true);
         this.eyesOpenerService.start();
         this.eyesCloserService.start();
+        this.resourceCollectionService.start();
         this.renderingGridService.start();
         this.eyesCheckerService.start();
         logger.verbose("exit");
@@ -398,6 +436,7 @@ public class VisualGridRunner extends EyesRunner {
         setServicesOn(false);
         this.eyesOpenerService.stopService();
         this.eyesCloserService.stopService();
+        this.resourceCollectionService.stopService();
         this.renderingGridService.stopService();
         this.eyesCheckerService.stopService();
         logger.verbose("exit");
@@ -465,8 +504,7 @@ public class VisualGridRunner extends EyesRunner {
     }
 
     public synchronized void check(ICheckSettings settings, IDebugResourceWriter debugResourceWriter, FrameData domData,
-                                   IEyesConnector connector, List<VisualGridTask> visualGridTaskList,
-                                   List<VisualGridTask> openVisualGridTasks, final RenderListener listener,
+                                   IEyesConnector connector, final List<VisualGridTask> checkVisualGridTasks,
                                    List<VisualGridSelector[]> selectors, UserAgent userAgent) {
 
         if (debugResourceWriter == null) {
@@ -476,12 +514,30 @@ public class VisualGridRunner extends EyesRunner {
             debugResourceWriter = new NullDebugResourceWriter();
         }
 
-        RenderingTask renderingTask = new RenderingTask(connector, domData, settings, visualGridTaskList,
-                openVisualGridTasks, this, debugResourceWriter, new RenderingTask.RenderTaskListener() {
+        TaskListener<List<RenderingTask>> listener = new TaskListener<List<RenderingTask>>() {
+            @Override
+            public void onComplete(List<RenderingTask> renderingTasks) {
+                logger.verbose("locking renderingTaskList");
+                synchronized (renderingTaskList) {
+                    renderingTaskList.addAll(renderingTasks);
+                }
+
+                logger.verbose("releasing renderingTaskList");
+                notifyAllServices();
+            }
+
+            @Override
+            public void onFail() {
+                notifyAllServices();
+            }
+        };
+
+        ResourceCollectionTask resourceCollectionTask = new ResourceCollectionTask(this, connector, domData,
+                userAgent, selectors, settings, checkVisualGridTasks, debugResourceWriter, listener,
+                new RenderingTask.RenderTaskListener() {
             @Override
             public void onRenderSuccess() {
                 logger.verbose("enter");
-                listener.onRenderSuccess();
                 notifyAllServices();
                 logger.verbose("exit");
             }
@@ -489,15 +545,14 @@ public class VisualGridRunner extends EyesRunner {
             @Override
             public void onRenderFailed(Exception e) {
                 notifyAllServices();
-                listener.onRenderFailed(e);
+                GeneralUtils.logExceptionStackTrace(logger, e);
             }
-        }, userAgent, selectors);
-        logger.verbose("locking renderingTaskList");
-        synchronized (renderingTaskList) {
-            this.renderingTaskList.add(renderingTask);
+        });
+
+        synchronized (this.resourceCollectionTaskList) {
+            resourceCollectionTaskList.add(resourceCollectionTask);
         }
 
-        logger.verbose("releasing renderingTaskList");
         notifyAllServices();
     }
 
@@ -542,24 +597,6 @@ public class VisualGridRunner extends EyesRunner {
         }
     }
 
-    public List<CompletableTask> getAllTasksByType(VisualGridTask.TaskType type) {
-        List<CompletableTask> allTasks = new ArrayList<>();
-        for (IRenderingEyes eyes : allEyes) {
-            for (RunningTest runningTest : eyes.getAllRunningTests()) {
-                for (VisualGridTask visualGridTask : runningTest.getVisualGridTaskList()) {
-                    if (visualGridTask.getType() == type) {
-                        allTasks.add(visualGridTask);
-                    }
-                }
-            }
-        }
-        return allTasks;
-    }
-
-    public List<? extends CompletableTask> getAllRenderingTasks() {
-        return this.renderingTaskList;
-    }
-
     public void setDebugResourceWriter(IDebugResourceWriter debugResourceWriter) {
         this.debugResourceWriter = debugResourceWriter;
     }
@@ -572,6 +609,7 @@ public class VisualGridRunner extends EyesRunner {
         eyesCheckerService.setLogger(logger);
         eyesCloserService.setLogger(logger);
         eyesOpenerService.setLogger(logger);
+        resourceCollectionService.setLogger(logger);
         renderingGridService.setLogger(logger);
         if (this.logger == null) {
             this.logger = logger;
