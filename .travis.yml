@@ -37,24 +37,24 @@ jobs:
     - stage: Test
       name: Core
       script:
-        - echo APPLITOOLS_REPORT_ID
+        - echo $APPLITOOLS_REPORT_ID
         - chmod +x ./runTests.sh
         - ./runTests.sh "eyes.sdk.core"
     - name: Images
       script:
-        - echo APPLITOOLS_REPORT_ID
+        - echo $APPLITOOLS_REPORT_ID
         - chmod +x ./runTests.sh
         - ./runTests.sh "eyes.images.java"
     - name: Appium IOS
       script:
-        - echo APPLITOOLS_REPORT_ID
+        - echo $APPLITOOLS_REPORT_ID
         - sh upload_app.sh "https://applitools.bintray.com/Examples/IOSTestApp/1.2/ipa/IOSTestApp.ipa" "app_ios"
         - sed -i 's/androidTestSuite.xml/iosTestSuite.xml/g' $TRAVIS_BUILD_DIR/eyes.appium.java/pom.xml;
         - chmod +x ./runTests.sh
         - ./runTests.sh "eyes.appium.java"
     - name: Selenium
       script:
-        - echo APPLITOOLS_REPORT_ID
+        - echo $APPLITOOLS_REPORT_ID
         - google-chrome --version
         - chromium-browser --version
         - latestChromeDriverURL=$(wget http://chromedriver.storage.googleapis.com/LATEST_RELEASE -q -O -)
@@ -70,7 +70,7 @@ jobs:
         - ./runTests.sh "eyes.selenium.java"
     - name: Generic
       script:
-        - echo APPLITOOLS_REPORT_ID
+        - echo $APPLITOOLS_REPORT_ID
         - nvm install 14.5.0
         - nvm use 14.5.0
         - cd eyes.selenium.java;
@@ -79,6 +79,10 @@ jobs:
           else
           yarn java;
           fi
+    - name: Tutorials
+      script:
+        - echo APPLITOOLS_REPORT_ID
+        - ./eyes.selenium.java/tutorials/run.sh
     - stage: Test Appium Android
       script:
         - echo APPLITOOLS_REPORT_ID
