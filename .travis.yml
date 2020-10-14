@@ -59,7 +59,7 @@ jobs:
         - chmod +x /home/travis/build/chromedriver
         - /home/travis/build/chromedriver --version
         - env webdriver.chrome.driver=/home/travis/build/
-        - if [[ $TRAVIS_TAG =~ ^FULL_COVERAGE_TESTS ]]; then
+        - if [ "$TRAVIS_EVENT_TYPE" == "cron" ] && [ "$TRAVIS_BRANCH" = "master" ]; then
           sed -i 's/passedTestsSuite.xml/devTestsSuite.xml/g' $TRAVIS_BUILD_DIR/eyes.selenium.java/pom.xml;
           fi
         - chmod +x ./runTests.sh
@@ -96,6 +96,17 @@ jobs:
         - sh upload_app.sh "https://applitools.bintray.com/Examples/androidx/1.1.0/app_androidx.apk" "app_androidx"
         - chmod +x ./runTests.sh
         - ./runTests.sh "eyes.appium.java"
+    - stage: Test Appium Failed
+      if: env(TRAVIS_EVENT_TYPE) =~ ^cron$ AND branch = master
+      script:
+        - echo APPLITOOLS_REPORT_ID
+        - sed -i 's/androidTestSuite.xml/failedTestSuite.xml/g' $TRAVIS_BUILD_DIR/eyes.appium.java/pom.xml;
+        - chmod +x ./runTests.sh
+        - ./runTests.sh "eyes.appium.java"
+    - stage: Full Regression Mail
+      if: env(TRAVIS_EVENT_TYPE) =~ ^cron$ AND branch = master
+      script:
+        - sh send_full_regression_mail.sh "$SDK"
     - stage: Deploy
       if: tag =~ ^RELEASE_CANDIDATE AND fork == false
       script:

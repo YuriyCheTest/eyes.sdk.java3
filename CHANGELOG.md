@@ -1,6 +1,7 @@
 ## [vNext]
 ### Added
 - new logs for printing dom snapshot result. [Trello 2252](https://trello.com/c/7aalHb28)
+- Implemented full-coverage report event. [Trello 2019](https://trello.com/c/3y4UcfXd)
 ### Updated
 - Dom Snapshot script version 4.2.2. [Trello 2226](https://trello.com/c/yH8WYHgt)
 ### Fixed
@@ -13,7 +14,6 @@
 ### Added
 - A new API for closing batch explicitly: `BatchClose`. [Trello 2189](https://trello.com/c/SlHH9Ssb)
 - A new log handler for sending logs to the eyes server. [Trello 2206](https://trello.com/c/EX8JfK7W)
-- Supporting check full element with ufg. [Trello 2145](https://trello.com/c/8tPAnz66)
 ### Fixed
 - Fixed ignoring statusBar height on cropping when invisible. [Trello 2202](https://trello.com/c/qEH2mQgP)
 ### Updated

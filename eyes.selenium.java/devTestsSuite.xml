@@ -1,7 +1,13 @@
 <!DOCTYPE suite SYSTEM "http://testng.org/testng-1.0.dtd" >
 
 <suite name="dev suite">
+
+    <listeners>
+        <listener class-name="com.applitools.eyes.utils.ReportingListener"/>
+    </listeners>
+
     <suite-files>
         <suite-file path="passedTestsSuite.xml" />
+        <suite-file path="mobileTestsSuite.xml" />
     </suite-files>
 </suite>
