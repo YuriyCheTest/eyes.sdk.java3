@@ -1,4 +1,6 @@
 ## [vNext]
+### Added
+- UFG skip list functionality. [Trello 1974](https://trello.com/c/44xq8dze)
 ### Updated
 - Dom Snapshot script version 4.2.2. [Trello 2226](https://trello.com/c/yH8WYHgt)
 
