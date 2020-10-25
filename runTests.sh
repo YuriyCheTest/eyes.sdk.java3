@@ -30,6 +30,7 @@ PING_LOOP_PID=$!
 # your_build_command_2 >> $BUILD_OUTPUT 2>&1
 if [ "$TRAVIS_EVENT_TYPE" == "cron" ]; then
   # If test fails, ignore fail
+  set +e
   mvn test -pl "$1" --fail-never
 else
   mvn test -pl "$1" -e -X
